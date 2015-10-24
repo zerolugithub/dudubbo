@@ -1,6 +1,6 @@
 import json
 import datetime
-import _model
+from . import _model
 
 def __JsonDefault(obj): 
     if isinstance(obj, datetime.datetime) : 
@@ -26,6 +26,6 @@ def printByteStr(encodeStr) :
         if col >= 16 :
             col = 0
             outstr += '\n'
-    print outstr
+    print(outstr)
 
 

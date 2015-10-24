@@ -5,10 +5,10 @@ import types
 import datetime
 import time
 import struct
-import pdb
-from cStringIO import StringIO
-from _model import *
-from _utils import printByteStr
+from io import BytesIO
+from ._model import *
+from ._utils import printByteStr
+from . import enhancetypes
 
 _Hessian2Input__debug = False
 
@@ -31,7 +31,7 @@ def encoderFor(data_type):
 
 class Hessian2Output(object) :
     def __init__(self) :
-        self.output = StringIO()
+        self.output = BytesIO() 
         self.types = []
         self.classDefs = []
         self.refs = []
@@ -45,11 +45,13 @@ class Hessian2Output(object) :
     def getLength(self) :
         return len(self.output.getvalue())
 
-    def __write(self, value) :
+    def __write(self, value):
+        if type(value) == str:
+            value = value.encode()
         self.output.write(value)
 
     def __writeByte(self, value) :
-        self.__write(chr(value))
+        self.__write(value.to_bytes(1, 'big'))
 
     def __pack(self, formatStr, value) :
         self.__write(struct.pack(formatStr, value))
@@ -61,18 +63,18 @@ class Hessian2Output(object) :
         else :
             raise TypeError('encoder cannot serialize %s' % (type(obj),))
 
-    @encoderFor(types.NoneType)
+    @encoderFor(type(None))
     def __encodeNull(self, value) :
         self.__write('N')
 
-    @encoderFor(types.BooleanType)
+    @encoderFor(bool)
     def __encodeBoolean(self, value) :
         if value :
             self.__write('T')
         else :
             self.__write('F')
 
-    @encoderFor(types.IntType)
+    @encoderFor(int)
     def __encodeInt(self, value) :
         '''
         int ::= 'I' b3 b2 b1 b0
@@ -95,7 +97,7 @@ class Hessian2Output(object) :
             self.__write('I')
             self.__pack('>i', value)
 
-    @encoderFor(types.LongType)
+    @encoderFor(enhancetypes.Long)
     def __encodeLong(self, value) :
         '''
          long ::= L b7 b6 b5 b4 b3 b2 b1 b0
@@ -116,14 +118,14 @@ class Hessian2Output(object) :
         elif -262144 <= value <= 262143 :
             self.__writeByte(0x3c + (value >> 16))
             self.__pack('>H', (value >> 8))
-        elif -0x80000000L <= value <= 0x7fffffffL:
+        elif -0x80000000 <= value <= 0x7fffffff:
             self.__write('\x59')
             self.__pack('>i', value)
         else :
             self.__write('L')
             self.__pack('>q', value)
 
-    @encoderFor(types.FloatType)
+    @encoderFor(float)
     def __encodeFloat(self, value) :
         '''
         double ::= D b7 b6 b5 b4 b3 b2 b1 b0
@@ -194,7 +196,7 @@ class Hessian2Output(object) :
             milliseconds += value.microsecond / 1000
             self.__pack('>q', milliseconds)
 
-    @encoderFor(types.StringType)
+    @encoderFor(bytes)
     def __encodeString(self, value) :
         '''
         string ::= x52 b1 b0 <utf8-data> string
@@ -203,7 +205,40 @@ class Hessian2Output(object) :
                ::= [x30-x33] b0 <utf8-data>
         '''
         try :
-            value = value.encode('ascii')
+            value = value.decode()
+        except UnicodeDecodeError:
+            raise TypeError('string containing bytes out of range 0x00-0x79, use Binary or unicode objects instead')
+        length = len(value)
+
+        while length > 65535 :
+            self.__write('\x52')
+            self.__pack('>H', 65535)
+            self.__write(value[:65535])
+            value = value[65535:]
+            length -= 65535
+
+        if length <= 31 :
+            self.__writeByte(length)
+        elif length <= 1023 :
+            self.__writeByte(0x30 + (length >> 8))
+            self.__writeByte(length & 0xff)
+        else :
+            self.__write('S')
+            self.__pack('>H', length)
+
+        if length > 0 :
+            self.__write(value)
+
+    @encoderFor(enhancetypes.Str)
+    def __encodeString(self, value) :
+        '''
+        string ::= x52 b1 b0 <utf8-data> string
+               ::= S b1 b0 <utf8-data>
+               ::= [x00-x1f] <utf8-data>
+               ::= [x30-x33] b0 <utf8-data>
+        '''
+        try :
+            value = value
         except UnicodeDecodeError:
             raise TypeError('string containing bytes out of range 0x00-0x79, use Binary or unicode objects instead')
         length = len(value)
@@ -227,7 +262,7 @@ class Hessian2Output(object) :
         if length > 0 :
             self.__write(value)
 
-    @encoderFor(types.UnicodeType)
+    @encoderFor(str)
     def __encodeUnicode(self, value) :
         '''
         string ::= x52 b1 b0 <utf8-data> string
@@ -240,7 +275,7 @@ class Hessian2Output(object) :
         while length > 65535 :
             self.__write('\x52')
             self.__pack('>H', 65535)
-            self.__write(value[:65535].encode('utf-8'))
+            self.__write(value[:65535])
             value = value[65535:]
             length -= 65535
         
@@ -254,7 +289,7 @@ class Hessian2Output(object) :
             self.__pack('>H', length)
         
         if length > 0 :
-            self.__write(value.encode('utf-8'))
+            self.__write(value)
 
     def __addRef(self, value) :
         refId = 0
@@ -268,7 +303,7 @@ class Hessian2Output(object) :
         self.refs.append(value)
         return False
 
-    @encoderFor(types.ListType)
+    @encoderFor(list)
     def __encodeList(self, value) :
         ''' list ::= x57 value* 'Z'        # variable-length untyped list '''
         if self.__addRef(value) :
@@ -279,7 +314,7 @@ class Hessian2Output(object) :
             self.__mWriteObject(element)
         self.__write('Z')
 
-    @encoderFor(types.TupleType)
+    @encoderFor(tuple)
     def __encodeTuple(self, value) :
         '''
             ::= x58 int value*        # fixed-length untyped list
@@ -296,7 +331,7 @@ class Hessian2Output(object) :
         for element in value :
             self.__mWriteObject(element)
 
-    @encoderFor(types.DictType)
+    @encoderFor(dict)
     def __encodeDict(self, value) :
         '''
             map ::= 'M' type (value value)* 'Z'
@@ -350,7 +385,7 @@ class Hessian2Output(object) :
         self.__write('C')
         self.__mWriteObject(type)
 
-        fieldNames = value.__dict__.keys()
+        fieldNames = list(value.__dict__.keys())
         fieldNames.remove('_metaType')
         
         self.__encodeInt(len(fieldNames))
@@ -382,9 +417,9 @@ DECODERS = [None] * 256
 def decodeFor(codes) :
     def register(f) :
         for code in codes :
-            if type(code) == types.IntType :
+            if type(code) == int:
                 DECODERS[code] = f
-            elif type(code) == types.TupleType and len(code) == 2:
+            elif type(code) == tuple and len(code) == 2:
                 for i in range(code[0], code[1] + 1) :
                     DECODERS[i] = f
         return f
@@ -394,7 +429,7 @@ def decodeFor(codes) :
 
 class Hessian2Input(object) :
     def __init__(self, bytes) :
-        self.input = StringIO(bytes)
+        self.input = BytesIO(bytes)
         self.types = []
         self.classDefs = []
         self.refs = []
@@ -430,13 +465,13 @@ class Hessian2Input(object) :
     @decodeFor((ord('N'),))
     def __decodeNull(self, code) :
         if __debug :
-            print 'read None'
+            print('read None')
         return None
 
     @decodeFor((ord('F'), ord('T')))
     def __decodeBoolean(self, code) :
         if __debug :
-            print 'read boolean :', code == 0x54
+            print('read boolean :', code == 0x54)
         return code == 0x54
 
     @decodeFor(((0x80, 0xbf), (0xc0, 0xcf), (0xd0, 0xd7), ord('I')))
@@ -456,7 +491,7 @@ class Hessian2Input(object) :
         else :
             result = struct.unpack('>i', self.__read(4))[0]
         if __debug :
-            print 'read int :', result
+            print('read int :', result)
         return result
             
     @decodeFor(((0xd8, 0xef), (0xf0, 0xff), (0x38, 0x3f), 0x59, ord('L')))
@@ -476,7 +511,7 @@ class Hessian2Input(object) :
         else :
             result = struct.unpack('>q', self.__read(8))[0]
         if __debug :
-            print 'read long :', result
+            print('read long :', result)
         return result
 
     @decodeFor((0x5b, 0x5c, 0x5d, 0x5e, 0x5f, ord('D')))
@@ -495,7 +530,7 @@ class Hessian2Input(object) :
         else :
             result = struct.unpack('>d', self.__read(8))[0]
         if __debug :
-            print 'read float :', result
+            print('read float :', result)
         return result
 
     @decodeFor((0x4a, 0x4b))
@@ -511,13 +546,14 @@ class Hessian2Input(object) :
             ts = time.localtime(timei * 60)
             result = datetime.datetime(ts.tm_year, ts.tm_mon, ts.tm_mday, ts.tm_hour, ts.tm_min)
         if __debug :
-            print 'read date :', result
+            print('read date :', result)
         return result
 
     def __readUTF(self, output, length) :
         while length > 0 :
             c = self.__readByte()
-            output.write(chr(c))
+            #output.write(chr(c))
+            output.write(c.to_bytes(1, 'big'))
             if c < 0x80 :
                 pass
             elif (c & 0xe0) == 0xc0 :
@@ -530,7 +566,7 @@ class Hessian2Input(object) :
         
     @decodeFor((0x52, ord('S'), (0x00, 0x1f), (0x30, 0x33)))
     def __decodeString(self, code) :
-        buf = StringIO()
+        buf = BytesIO()
         while code == 0x52 :
             length = struct.unpack('>H', self.__read(2))[0]
             self.__readUTF(buf, length)
@@ -547,7 +583,7 @@ class Hessian2Input(object) :
         self.__readUTF(buf, length)
         result = buf.getvalue().decode('utf-8')
         if __debug :
-            print 'read string :', result
+            print('read string :', result)
         return result
 
     def __decodeType(self) :
@@ -562,7 +598,7 @@ class Hessian2Input(object) :
                 raise ValueError('type string is empty')
             self.types.append(type)
             if __debug :
-                print 'read type :', type
+                print('read type :', type)
             return type
         elif code == ord('I')               \
             or (0x80 <= code <= 0xbf)       \
@@ -573,7 +609,7 @@ class Hessian2Input(object) :
             if typeId < 0 or typeId >= len(self.types) :
                 raise ValueError('type id %d undefined' % (typeId,))
             if __debug :
-                print 'read type ref :', typeId, self.types[typeId]
+                print('read type ref :', typeId, self.types[typeId])
             return self.types[typeId]
         else :
             raise ValueError('code %x is unexpected when decode type')
@@ -591,7 +627,7 @@ class Hessian2Input(object) :
     
         self.refs.append(result)
         if __debug :
-            print 'read list :', result
+            print('read list :', result)
         return result
 
     @decodeFor((ord('V'), 0x58, (0x70, 0x77), (0x78, 0x7f)))
@@ -616,7 +652,7 @@ class Hessian2Input(object) :
         result = tuple(result)
         self.refs.append(result)
         if __debug :
-            print 'read tuple :', result
+            print('read tuple :', result)
         return result
 
     @decodeFor((ord('H'), ord('M')))
@@ -635,7 +671,7 @@ class Hessian2Input(object) :
 
         self.refs.append(result)
         if __debug :
-            print 'read dict :', result
+            print('read dict :', result)
         return result
 
     @decodeFor((0x41, ord('B'), (0x20, 0x2f), (0x34, 0x37)))
@@ -658,7 +694,7 @@ class Hessian2Input(object) :
             result += Binary(self.__read(length))
         
         if __debug :
-            print 'read Binary :', result
+            print('read Binary :', result)
         return result
 
     @decodeFor((ord('C'),))
@@ -673,7 +709,7 @@ class Hessian2Input(object) :
         self.classDefs.append(ClassDef(type, fieldNames))
 
         if __debug :
-            print 'read ClassDef :', ClassDef(type, fieldNames)
+            print('read ClassDef :', ClassDef(type, fieldNames))
         return None
 
     @decodeFor((ord('O'), (0x60, 0x6f)))
@@ -689,16 +725,16 @@ class Hessian2Input(object) :
         result = {}
         cDef = self.classDefs[defId]
         if __debug :
-            print 'start read Object : defId =', defId, 'type =', cDef.type
+            print('start read Object : defId =', defId, 'type =', cDef.type)
         for key in cDef.fieldNames :
             result[key] = self.__mReadObject(self.__readByte())
             if __debug :
-                print 'read Object field :', key, ' =', result[key]
+                print('read Object field :', key, ' =', result[key])
         
         self.refs.append(result)
 
         if __debug :
-            print 'read Object :', result
+            print('read Object :', result)
         return Object(cDef.type, result)
 
     @decodeFor((0x51,))
@@ -708,13 +744,12 @@ class Hessian2Input(object) :
             raise ValueError('ref id %d is undefined' % (refId,))
 
         if __debug :
-            print 'read ref :', refId
+            print('read ref :', refId)
         return self.refs[refId]
 
 if __name__ == '__main__' :
-    '''
     a = {'b':1, 'a':'cfdfdfd', 'c':[1, 2, 3], 'd':u'你好'}
-    print a
+    print(a)
 
     output = Hessian2Output()
     output.writeObject(a)
@@ -724,86 +759,86 @@ if __name__ == '__main__' :
     input = Hessian2Input(byteStr)
 
     b = input.readObject()
-    print b'''
+    print(b)
     data = '''
-    43 30 27 63 6f 6d 2e 71 75 6e 61 72 2e 74 72 
-    61 76 65 6c 2e 62 6f 6f 6b 2e 6d 6f 64 65 6c 32 
-    2e 54 72 61 76 65 6c 42 6f 6f 6b b8 02 69 64 06 
-    75 73 65 72 49 64 0a 74 65 6d 70 55 73 65 72 49 
-    64 08 75 73 65 72 4e 61 6d 65 09 6c 61 62 65 6c 
-    4e 61 6d 65 08 64 65 73 74 4e 61 6d 65 05 74 69 
-    74 6c 65 0c 70 61 70 65 72 43 6f 6e 74 65 6e 74 
-    0b 70 68 6f 6e 65 4e 75 6d 62 65 72 04 6d 65 6d 
-    6f 08 63 69 74 79 4e 61 6d 65 07 70 75 62 6c 69 
-    73 68 0a 70 75 62 6c 69 73 68 4e 75 6d 0b 64 6f 
-    77 6e 6c 6f 61 64 4e 75 6d 0c 73 6f 75 72 63 65 
-    42 6f 6f 6b 49 64 06 73 74 61 74 75 73 06 70 65 
-    72 6d 69 74 05 73 63 6f 72 65 02 69 70 0c 63 6f 
-    72 65 50 72 6f 76 69 6e 63 65 05 65 6d 61 69 6c 
-    08 69 6d 61 67 65 55 72 6c 06 63 69 74 79 49 64 
-    06 61 62 72 6f 61 64 04 61 72 65 61 09 72 6f 75 
-    74 65 44 61 79 73 0c 63 6f 6d 6d 65 6e 74 43 6f 
-    75 6e 74 0e 72 65 63 6f 6d 6d 65 6e 64 43 6f 75 
-    6e 74 0d 71 75 65 73 74 69 6f 6e 43 6f 75 6e 74 
-    09 62 65 73 74 44 61 79 49 64 09 73 74 61 72 74 
-    54 69 6d 65 05 63 54 69 6d 65 05 75 54 69 6d 65 
-    11 74 72 61 76 65 6c 42 6f 6f 6b 44 61 79 4c 69 
-    73 74 0c 63 69 74 79 49 6e 66 6f 4c 69 73 74 0e 
-    74 72 61 76 65 6c 43 69 74 79 4c 69 73 74 13 74 
-    72 61 76 65 6c 43 69 74 79 52 6f 75 74 65 4c 69 
-    73 74 0a 63 6f 6c 6c 65 63 74 44 61 79 0a 64 65 
-    73 74 43 69 74 69 65 73 0c 6f 6c 64 42 6f 6f 6b 
-    4d 6f 64 65 6c 60 59 00 0a 90 67 59 07 3b bc 50 
-    4e 08 72 75 74 67 31 31 36 35 4e 4e 06 e6 88 91 
-    e7 9a 84 e6 97 85 e8 a1 8c e6 94 bb e7 95 a5 4e 
-    0b 31 33 36 30 30 34 30 38 39 34 30 4e 4e 54 90 
-    90 e0 90 54 49 00 2d f2 38 0d 31 31 34 2e 32 31 
-    36 2e 32 33 2e 35 36 4e 4e 4e 90 46 90 90 90 90 
-    90 e0 4b 01 58 6a 00 4a 00 00 01 3b 52 51 9b f8 
-    4a 00 00 01 3b 52 51 9b f8 78 78 4e 78 4e 4e 43 
-    30 26 63 6f 6d 2e 71 75 6e 61 72 2e 74 72 61 76 
-    65 6c 2e 62 6f 6f 6b 2e 6d 6f 64 65 6c 2e 54 72 
-    61 76 65 6c 42 6f 6f 6b b8 02 69 64 06 75 73 65 
-    72 49 64 0a 74 65 6d 70 55 73 65 72 49 64 08 75 
-    73 65 72 4e 61 6d 65 09 6c 61 62 65 6c 4e 61 6d 
-    65 08 64 65 73 74 4e 61 6d 65 05 74 69 74 6c 65 
-    0c 70 61 70 65 72 43 6f 6e 74 65 6e 74 0b 70 68 
-    6f 6e 65 4e 75 6d 62 65 72 04 6d 65 6d 6f 08 63 
-    69 74 79 4e 61 6d 65 07 70 75 62 6c 69 73 68 0a 
-    70 75 62 6c 69 73 68 4e 75 6d 0b 64 6f 77 6e 6c 
-    6f 61 64 4e 75 6d 0c 73 6f 75 72 63 65 42 6f 6f 
-    6b 49 64 06 73 74 61 74 75 73 06 70 65 72 6d 69 
-    74 05 73 63 6f 72 65 02 69 70 0c 63 6f 72 65 50 
-    72 6f 76 69 6e 63 65 05 65 6d 61 69 6c 08 69 6d 
-    61 67 65 55 72 6c 06 63 69 74 79 49 64 06 61 62 
-    72 6f 61 64 04 61 72 65 61 08 69 6e 74 65 67 72 
-    61 6c 09 72 6f 75 74 65 44 61 79 73 0c 63 6f 6d 
-    6d 65 6e 74 43 6f 75 6e 74 0e 72 65 63 6f 6d 6d 
-    65 6e 64 43 6f 75 6e 74 0d 71 75 65 73 74 69 6f 
-    6e 43 6f 75 6e 74 09 62 65 73 74 44 61 79 49 64 
-    0a 70 68 6f 74 6f 43 6f 75 6e 74 09 73 74 61 72 
-    74 54 69 6d 65 05 63 54 69 6d 65 05 75 54 69 6d 
-    65 11 74 72 61 76 65 6c 42 6f 6f 6b 44 61 79 4c 
-    69 73 74 0e 74 72 61 76 65 6c 43 69 74 79 4c 69 
-    73 74 0a 63 6f 6c 6c 65 63 74 44 61 79 0a 64 65 
-    73 74 43 69 74 69 65 73 05 6d 54 69 6d 65 61 59 
-    00 0a 90 67 59 07 3b bc 50 4e 08 72 75 74 67 31 
-    31 36 35 4e 4e 06 e6 88 91 e7 9a 84 e6 97 85 e8 
-    a1 8c e6 94 bb e7 95 a5 4e 0b 31 33 36 30 30 34 
-    30 38 39 34 30 4e 4e 54 90 90 e0 90 54 49 00 2d 
-    f2 38 0d 31 31 34 2e 32 31 36 2e 32 33 2e 35 36 
-    4e 4e 4e 90 46 90 90 90 90 90 90 e0 90 4b 01 58 
-    6a 00 4a 00 00 01 3b 52 51 9b f8 4a 00 00 01 3b 
+    43 30 27 63 6f 6d 2e 71 75 6e 61 72 2e 74 72
+    61 76 65 6c 2e 62 6f 6f 6b 2e 6d 6f 64 65 6c 32
+    2e 54 72 61 76 65 6c 42 6f 6f 6b b8 02 69 64 06
+    75 73 65 72 49 64 0a 74 65 6d 70 55 73 65 72 49
+    64 08 75 73 65 72 4e 61 6d 65 09 6c 61 62 65 6c
+    4e 61 6d 65 08 64 65 73 74 4e 61 6d 65 05 74 69
+    74 6c 65 0c 70 61 70 65 72 43 6f 6e 74 65 6e 74
+    0b 70 68 6f 6e 65 4e 75 6d 62 65 72 04 6d 65 6d
+    6f 08 63 69 74 79 4e 61 6d 65 07 70 75 62 6c 69
+    73 68 0a 70 75 62 6c 69 73 68 4e 75 6d 0b 64 6f
+    77 6e 6c 6f 61 64 4e 75 6d 0c 73 6f 75 72 63 65
+    42 6f 6f 6b 49 64 06 73 74 61 74 75 73 06 70 65
+    72 6d 69 74 05 73 63 6f 72 65 02 69 70 0c 63 6f
+    72 65 50 72 6f 76 69 6e 63 65 05 65 6d 61 69 6c
+    08 69 6d 61 67 65 55 72 6c 06 63 69 74 79 49 64
+    06 61 62 72 6f 61 64 04 61 72 65 61 09 72 6f 75
+    74 65 44 61 79 73 0c 63 6f 6d 6d 65 6e 74 43 6f
+    75 6e 74 0e 72 65 63 6f 6d 6d 65 6e 64 43 6f 75
+    6e 74 0d 71 75 65 73 74 69 6f 6e 43 6f 75 6e 74
+    09 62 65 73 74 44 61 79 49 64 09 73 74 61 72 74
+    54 69 6d 65 05 63 54 69 6d 65 05 75 54 69 6d 65
+    11 74 72 61 76 65 6c 42 6f 6f 6b 44 61 79 4c 69
+    73 74 0c 63 69 74 79 49 6e 66 6f 4c 69 73 74 0e
+    74 72 61 76 65 6c 43 69 74 79 4c 69 73 74 13 74
+    72 61 76 65 6c 43 69 74 79 52 6f 75 74 65 4c 69
+    73 74 0a 63 6f 6c 6c 65 63 74 44 61 79 0a 64 65
+    73 74 43 69 74 69 65 73 0c 6f 6c 64 42 6f 6f 6b
+    4d 6f 64 65 6c 60 59 00 0a 90 67 59 07 3b bc 50
+    4e 08 72 75 74 67 31 31 36 35 4e 4e 06 e6 88 91
+    e7 9a 84 e6 97 85 e8 a1 8c e6 94 bb e7 95 a5 4e
+    0b 31 33 36 30 30 34 30 38 39 34 30 4e 4e 54 90
+    90 e0 90 54 49 00 2d f2 38 0d 31 31 34 2e 32 31
+    36 2e 32 33 2e 35 36 4e 4e 4e 90 46 90 90 90 90
+    90 e0 4b 01 58 6a 00 4a 00 00 01 3b 52 51 9b f8
+    4a 00 00 01 3b 52 51 9b f8 78 78 4e 78 4e 4e 43
+    30 26 63 6f 6d 2e 71 75 6e 61 72 2e 74 72 61 76
+    65 6c 2e 62 6f 6f 6b 2e 6d 6f 64 65 6c 2e 54 72
+    61 76 65 6c 42 6f 6f 6b b8 02 69 64 06 75 73 65
+    72 49 64 0a 74 65 6d 70 55 73 65 72 49 64 08 75
+    73 65 72 4e 61 6d 65 09 6c 61 62 65 6c 4e 61 6d
+    65 08 64 65 73 74 4e 61 6d 65 05 74 69 74 6c 65
+    0c 70 61 70 65 72 43 6f 6e 74 65 6e 74 0b 70 68
+    6f 6e 65 4e 75 6d 62 65 72 04 6d 65 6d 6f 08 63
+    69 74 79 4e 61 6d 65 07 70 75 62 6c 69 73 68 0a
+    70 75 62 6c 69 73 68 4e 75 6d 0b 64 6f 77 6e 6c
+    6f 61 64 4e 75 6d 0c 73 6f 75 72 63 65 42 6f 6f
+    6b 49 64 06 73 74 61 74 75 73 06 70 65 72 6d 69
+    74 05 73 63 6f 72 65 02 69 70 0c 63 6f 72 65 50
+    72 6f 76 69 6e 63 65 05 65 6d 61 69 6c 08 69 6d
+    61 67 65 55 72 6c 06 63 69 74 79 49 64 06 61 62
+    72 6f 61 64 04 61 72 65 61 08 69 6e 74 65 67 72
+    61 6c 09 72 6f 75 74 65 44 61 79 73 0c 63 6f 6d
+    6d 65 6e 74 43 6f 75 6e 74 0e 72 65 63 6f 6d 6d
+    65 6e 64 43 6f 75 6e 74 0d 71 75 65 73 74 69 6f
+    6e 43 6f 75 6e 74 09 62 65 73 74 44 61 79 49 64
+    0a 70 68 6f 74 6f 43 6f 75 6e 74 09 73 74 61 72
+    74 54 69 6d 65 05 63 54 69 6d 65 05 75 54 69 6d
+    65 11 74 72 61 76 65 6c 42 6f 6f 6b 44 61 79 4c
+    69 73 74 0e 74 72 61 76 65 6c 43 69 74 79 4c 69
+    73 74 0a 63 6f 6c 6c 65 63 74 44 61 79 0a 64 65
+    73 74 43 69 74 69 65 73 05 6d 54 69 6d 65 61 59
+    00 0a 90 67 59 07 3b bc 50 4e 08 72 75 74 67 31
+    31 36 35 4e 4e 06 e6 88 91 e7 9a 84 e6 97 85 e8
+    a1 8c e6 94 bb e7 95 a5 4e 0b 31 33 36 30 30 34
+    30 38 39 34 30 4e 4e 54 90 90 e0 90 54 49 00 2d
+    f2 38 0d 31 31 34 2e 32 31 36 2e 32 33 2e 35 36
+    4e 4e 4e 90 46 90 90 90 90 90 90 e0 90 4b 01 58
+    6a 00 4a 00 00 01 3b 52 51 9b f8 4a 00 00 01 3b
     52 51 9b f8 78 4e 4e 4e 4e
     '''
 
     data = data.split()
     data = [chr(eval('0x' + num)) for num in data]
     data = ''.join(data)
-    print len(data)
+    print(len(data))
     printByteStr(data)
 
     input = Hessian2Input(data)
 
-    print input.readObject()
+    print(input.readObject())
 

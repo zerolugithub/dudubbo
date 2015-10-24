@@ -1,10 +1,9 @@
-import protocol
+from . import protocol
 import threading
-import thread
 import socket
-import Queue
+import queue as Queue
 import time
-from _utils import *
+from ._utils import *
 
 class Future(object) :
     FUTURES = {}
@@ -80,13 +79,13 @@ class Future(object) :
                 if future.isDone() :
                     continue
                 if (time.time() - future.timestamp) > future.timeout :
-                    print 'find timeout future'
+                    print('find timeout future')
                     response = protocol.DubboResponse(future.id)
                     response.status = protocol.DubboResponse.SERVER_TIMEOUT
                     response.seterrorMsg = 'waiting response timeout. elapsed :' + str(future.timeout)
                     Future.received(response)
-        except Exception, e:
-            print 'check timeout loop' + str(e)
+        except Exception as e:
+            print('check timeout loop' + str(e))
 
 class Endpoint(object) :
     def __init__(self, addr, readHandler) :
@@ -100,8 +99,8 @@ class Endpoint(object) :
     def start(self) :
         self.sock.connect(self.addr)
         self.cTime = time.time()
-        thread.start_new_thread(self.__sendLoop, ())
-        thread.start_new_thread(self.__recvLoop, ())
+        threading._start_new_thread(self.__sendLoop, ())
+        threading._start_new_thread(self.__recvLoop, ())
 
     def send(self, data) :
         self.queue.put(data)
@@ -111,8 +110,8 @@ class Endpoint(object) :
             try :
                 data = self.queue.get()
                 self.sock.sendall(data)
-            except Exception, e :
-                print 'send error'
+            except Exception as e :
+                print('send error')
                 self.__reconnection()
 
     def __reconnection(self) :
@@ -121,57 +120,55 @@ class Endpoint(object) :
             self.lock.release()
             return
         try :
-            print 'start reconnection'
+            print('start reconnection')
             while True :
                 try :
-                    print 'start shutdown'
+                    print('start shutdown')
                     try :
                         self.sock.shutdown(socket.SHUT_RDWR)
                     except :
                         pass
-                    print 'finish shutdown'
+                    print('finish shutdown')
                     del self.sock
-                    print 'create new socket'
+                    print('create new socket')
                     self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    print 'create new socket finish'
+                    print('create new socket finish')
                     self.cTime = time.time()
-                    print 'start connect'
+                    print('start connect')
                     self.sock.connect(self.addr)
-                    print 'finish connect'
+                    print('finish connect')
                     break
                 except socket.error :
                     if time.time() - self.cTime < 2 :
                         time.sleep(2)
         finally :
             self.lock.release()
-        print 'end reconnection'
+        print('end reconnection')
 
     def __recv(self, length) :
         while True :
             data = self.sock.recv(length)
             if not data :
-                print 'recv error'
+                print('recv error')
                 self.__reconnection()
                 continue
             return data
 
     def __recvLoop(self) :
         while True :
-            try :
-                header = self.__recv(protocol.HEADER_LENGTH)
-                if header[:2] != protocol.MAGIC_NUMBER :
-                    continue
-                while len(header) < protocol.HEADER_LENGTH :
-                    temp = self.__recv(protocol.HEADER_LENGTH - len(header))
-                    header += temp
-                dataLength = protocol.getDataLength(header)
-                data = ''
-                while len(data) < dataLength :
-                    temp = self.__recv(dataLength - len(data))
-                    data += temp
-                self.readHandler(header, data)
-            except Exception, e :
-                print 'recv loop' + str(e)
+            header = self.__recv(protocol.HEADER_LENGTH)
+            if header[:2] != protocol.MAGIC_NUMBER :
+                continue
+            while len(header) < protocol.HEADER_LENGTH :
+                temp = self.__recv(protocol.HEADER_LENGTH - len(header))
+                header += temp
+            dataLength = protocol.getDataLength(header)
+            data = b''
+            while len(data) < dataLength :
+                temp = self.__recv(dataLength - len(data))
+                data += temp
+            self.readHandler(header, data)
+
 
 class DubboChannel(object) :
     def __init__(self, addr) :

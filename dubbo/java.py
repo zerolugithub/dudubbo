@@ -1,8 +1,8 @@
 import zipfile
 import os
 import struct
-from cStringIO import StringIO
-from _model import Object
+from io import StringIO, BytesIO
+from ._model import Object
 
 MAGIC_NUMBER = 0xCAFEBABE
 
@@ -74,7 +74,7 @@ class JavaClassInfo(object) :
 
     def __getClassName(self, index) :
         nameIndex = self.constantPool[index][1]
-        return self.__getString(nameIndex).replace('/', '.')
+        return self.__getString(nameIndex).decode('utf-8').replace('/', '.')
 
     def __getString(self, index) :
         return self.constantPool[index][2]
@@ -289,6 +289,31 @@ class JavaClassLoader(object) :
             self.classMap[className] = classInfo
         return classInfo
 
+    def createObject(self, className) :
+        '''
+        create an Object with public final static field in class, the field type must be String or primitive type
+        '''
+        if type(className) == bytes:
+            className_str = className.decode()
+        else:
+            className_str = className
+        classInfo = self.findClassInfo(className_str)
+        if classInfo == None :
+            return None
+        obj = Object(className)
+        for field in classInfo.fields:
+            if field['accessFlags'] & ACC_PUBLIC & ACC_STATIC & ACC_FINAL != \
+                    ACC_PUBLIC & ACC_STATIC & ACC_FINAL:
+                continue
+            name = classInfo.constantPool[field['nameIndex']][2]
+            fieldType = classInfo.constantPool[field['descriptorIndex']][2]
+            if fieldType not in JAVA_PRIMITIVE_TYPE and not fieldType.decode().startswith('Ljava/lang/') :
+                continue
+
+            value = None
+            obj.__setattr__(name.decode('utf-8'), value)
+        return obj
+
     def createConstObject(self, className) :
         '''
         create an Object with public final static field in class, the field type must be String or primitive type
@@ -297,13 +322,13 @@ class JavaClassLoader(object) :
         if classInfo == None :
             return None
         obj = Object(className)
-        for field in classInfo.fields :
+        for field in classInfo.fields:
             if field['accessFlags'] & ACC_PUBLIC & ACC_STATIC & ACC_FINAL != \
-                    ACC_PUBLIC & ACC_STATIC & ACC_FINAL :
+                    ACC_PUBLIC & ACC_STATIC & ACC_FINAL:
                 continue
             name = classInfo.constantPool[field['nameIndex']][2]
             fieldType = classInfo.constantPool[field['descriptorIndex']][2]
-            if fieldType not in JAVA_PRIMITIVE_TYPE and fieldType != 'Ljava/lang/String;' :
+            if fieldType not in JAVA_PRIMITIVE_TYPE and fieldType != 'Ljava/lang/String;' and not fieldType.startswith('Ljava/lang/') :
                 continue
             
             valueIndex = ''
@@ -328,32 +353,26 @@ class JavaClassLoader(object) :
         return obj
 
 
-    def __findClassInput(self, className) :
+    def __findClassInput(self, className):
+        if type(className) == bytes:
+            className = className.decode()
+
         classFileName = className.replace('.', '/') + '.class'
-        for path in self.classPath :
-            if os.path.isdir(path) :
+        for path in self.classPath:
+            if os.path.isdir(path):
                 tempPath = os.path.join(path, classFileName)
-                if os.path.isfile(tempPath) :
+                if os.path.isfile(tempPath):
                     return file(tempPath)
             else :
                 jarFile = zipfile.ZipFile(path)
                 try :
                     classData = jarFile.read(classFileName)
-                except KeyError :
+                except KeyError:
                     continue
                 finally :
                     jarFile.close()
-                return StringIO(classData)
+                
+                return BytesIO(classData)
         return None
-
-
-if __name__ == '__main__' :
-    javaClassLoader = JavaClassLoader('../:../travel-service-interface-1.5.3.jar')
-    #obj = javaClassLoader.createConstObject('com.qunar.travel.book.constant.BookElementType')
-    #classInfo = javaClassLoader.findClassInfo('com.qunar.travel.book.constant.BookElementType')
-    classInfo = javaClassLoader.createConstObject('temp')
-    print classInfo
-    
-    print '-----------'
 
 

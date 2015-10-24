@@ -1,23 +1,20 @@
-#!/usr/python
 #coding=utf-8
 import json
-import protocol
-import hessian2
+from . import protocol
+from . import hessian2
 import threading
-import thread
-import Queue
 import types
 import json
 import datetime
 import time
 import random
 
-import java
-from constants import *
-import _model
-from _utils import *
-from _net import *
-import scheduler
+from . import java
+from .constants import *
+from . import _model
+from ._utils import *
+from ._net import *
+from . import scheduler
 
 __version__ = '0.1.0'
 
@@ -108,6 +105,8 @@ class ServiceProxy(object) :
                     self.methodConfig[methodName].update(methodConfig)
 
     def invoke(self, name, args) :
+        if type(name) == str:
+            name = name.encode('utf-8')
         if not name in self.classInfo.methodMap :
             raise KeyError('interface ' + self.classInfo.thisClass + ' has no method name ' + str(name))
         methods = self.classInfo.methodMap[name]
@@ -131,8 +130,6 @@ class ServiceProxy(object) :
         attachments = self.attachments.copy()
         if name in self.methodConfig :
             attachments.update(self.methodConfig[name])
-        #print attachments
-        #print name, paramType, '(' + ', '.join([str(arg) for arg in args]) + ')', self.attachments
         invocation = protocol.RpcInvocation(name, paramType, args, attachments)
         return self.client.invoke(invocation)
 
@@ -170,7 +167,7 @@ class ServiceProxy(object) :
 
     def __getParamType(self, method) :
         paramType = self.classInfo.constantPool[method['descriptorIndex']][2]
-        paramType = paramType[paramType.find('(') + 1 : paramType.find(')')]
+        paramType = paramType[paramType.find(b'(') + 1 : paramType.find(b')')]
         return paramType
 
     def __getattr__(self, name) :
@@ -214,6 +211,9 @@ class Dubbo(object):
         self.client = DubboClient(addrs, self.config)
         scheduledExecutor.schedule(Future._checkTimeoutLoop, \
                 DEFAULT_FUTURE_CHECK_PERIOD, DEFAULT_FUTURE_CHECK_PERIOD)
+
+    def getObject(self, name):
+        return self.javaClassLoader.createObject(name)
 
     def getProxy(self, interface, **args) :
         classInfo = self.javaClassLoader.findClassInfo(interface)

@@ -1,10 +1,10 @@
 
 import threading
 import struct
-import hessian2
+from . import hessian2
 
 HEADER_LENGTH = 16
-MAGIC_NUMBER = '\xda\xbb'
+MAGIC_NUMBER = b'\xda\xbb'
 FLAG_REQUEST = 0x80
 FLAG_TWOWAY = 0x40
 FLAG_EVENT = 0x20
@@ -72,7 +72,7 @@ class DubboResponse(object) :
     def isHeartBeat(self) :
         return self.event and self.result == None
 
-    def setEvent(self, reult) :
+    def setEvent(self, result) :
         self.event = True
         self.result = result
 
@@ -98,7 +98,7 @@ def encodeRequestData(invocation) :
     out.writeObject(invocation.attachments['version'])
     out.writeObject(invocation.methodName)
     out.writeObject(invocation.paramTypes)
-    for param in invocation.params :
+    for param in invocation.params:
         #oo = hessian2.Hessian2Output()
         #oo.writeObject(param)
         #hessian2.printByteStr(oo.getByteString())
@@ -114,19 +114,19 @@ def encodeEventData(data) :
 def encodeRequest(request) :
     if not isinstance(request, DubboRequest) :
         raise TypeError('encodeRequest only support DubboRequest type')
-    header = ''
+    header = b''
     header += MAGIC_NUMBER
     flag = HESSIAN2_CONTENT_TYPE_ID | FLAG_REQUEST
-    if request.isEvent :
+    if request.isEvent:
         flag |= FLAG_EVENT
-    if request.isTwoWay :
+    if request.isTwoWay:
         flag |= FLAG_TWOWAY
 
-    header += chr(flag)
-    header += '\x00'
+    header += flag.to_bytes(1, 'big')
+    header += b'\x00'
     header += struct.pack('>q', request.rid)
 
-    if request.isEvent :
+    if request.isEvent:
         pass
         data = encodeEventData(request.data)
     else :
@@ -189,8 +189,10 @@ def decodeRequestData(request, input) :
     return None
 
 def decode(header, data) :
-    flag = ord(header[2])
-    status = ord(header[3])
+    #flag = ord(header[2])
+    flag = header[2]
+    #status = ord(header[3])
+    status = header[3]
     rid = getRequestId(header)
     input = hessian2.Hessian2Input(data)
     if flag & FLAG_REQUEST != 0 :

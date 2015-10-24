@@ -1,5 +1,7 @@
 PyDubbo
 =======
+本项目原网址  
+https://github.com/zhouyougit/PyDubbo
 
 这是一个python实现的dubbo服务调用的客户端
 
@@ -17,7 +19,7 @@ PyDubbo
 
 示例
 ----------
-        config = { 'classpath' : '%classpath%' }
+        config = { 'classpath' : JAR_FILE_PATH} 
         client = Dubbo((('localhost', 20880),), config)
         remoteService = client.getProxy('com.test.RemoteService')
 
@@ -26,6 +28,8 @@ PyDubbo
 Java Object 相关
 ----------------
 接口输入输出需要Java Class时，使用Object的实例
+可以使用 `JavaLoader` 的 `CreateObject` 方法创建一个 `Object`
+对象，默认属性值全部为 `None` (java中的`null`)
 
 config 参考
 -----------

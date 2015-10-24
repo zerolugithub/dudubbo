@@ -20,8 +20,8 @@ class Task(object) :
     def fire(self) :
         try :
             self.cmd()
-        except Exception, e:
-            print 'task fire raise an exception : ' + str(e)
+        except Exception as e:
+            print('task fire raise an exception : ' + str(e))
 
 class Scheduler(threading.Thread) :
     def __init__(self) :
@@ -66,8 +66,8 @@ class Scheduler(threading.Thread) :
                         task.lastTime = time.time()
                         heapq.heappush(self.queue, (task.getNextTime(), task))
                 task.fire()
-            except Exception, e:
-                print e
+            except Exception as e:
+                print(e)
 
     def stop(self) :
         self.isRun = False
