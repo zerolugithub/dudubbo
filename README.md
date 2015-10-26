@@ -19,11 +19,18 @@ https://github.com/zhouyougit/PyDubbo
 
 示例
 ----------
-        config = { 'classpath' : JAR_FILE_PATH} 
-        client = Dubbo((('localhost', 20880),), config)
-        remoteService = client.getProxy('com.test.RemoteService')
+```python
+    from dubbo import Dubbo
+    from dubbo._model import Object
 
-        print remoteService.getTestInfo(123)
+
+    config = { 'classpath' : 'dubbo/oop-api-client-1.0.7.jar' }
+    client = Dubbo(((IP, PORT),), config, enable_heartbeat=True) #
+enable heartbeats
+    # client = Dubbo(((IP, PORT),), config)
+    q = client.getProxy('com.dmall....')
+    print(q.queryStoreAllInfoById(41).model)
+```
 
 Java Object 相关
 ----------------

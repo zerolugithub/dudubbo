@@ -16,11 +16,24 @@ from ._utils import *
 from ._net import *
 from . import scheduler
 
+from concurrent.futures import ThreadPoolExecutor
+
+executors = ThreadPoolExecutor(max_workers=1000)
+
 __version__ = '0.1.0'
 
 RpcContext = threading.local()
 
-scheduledExecutor = scheduler.Scheduler()
+def periodic_run(sec):
+    def runner(func):
+        def wrapper(*args, **kwargs):
+            while True:
+                func(*args, **kwargs)
+                time.sleep(sec)
+                print('will run')
+        return wrapper
+    return runner
+
 
 def _getRequestParam(request, key, default = None) :
     if key in request.data.attachments :
@@ -28,8 +41,9 @@ def _getRequestParam(request, key, default = None) :
     return default
 
 class DubboClient(object) :
-    def __init__(self, addrs, config) :
+    def __init__(self, addrs, config, enable_heartbeat=False) :
         self.channels = []
+        self._enable_heartbeat = enable_heartbeat
         for addr in addrs :
             self.channels.append(DubboChannel(addr))
 
@@ -38,28 +52,30 @@ class DubboClient(object) :
         else :
             self.heartbeat = DEFAULT_HEARTBEAT
 
-        scheduledExecutor.schedule(self.__heartbeatCheck, self.heartbeat, self.heartbeat)
-    
+        if enable_heartbeat:
+            executors.submit(self.__heartbeatCheck)
+        #scheduledExecutor.schedule(self.__heartbeatCheck, self.heartbeat, self.heartbeat)
+
     def invoke(self, rpcInvocation) :
         request = protocol.DubboRequest()
         request.data = rpcInvocation
-        
+
         channel = self.__selectChannel(request)
 
         timeout = _getRequestParam(request, KEY_TIMEOUT)
         withReturn = _getRequestParam(request, KEY_WITH_RETURN, True)
         async = _getRequestParam(request, KEY_ASYNC, False)
-        
+
         if not withReturn :
-            channel.send(data)
+            channel.send(request)
             return
-        
-        if async :
+
+        if async:
             future = Future(request, timeout, channel)
             RpcContext.future = future
             channel.send(request)
             return
-        else :
+        else:
             future = Future(request, timeout, channel)
             channel.send(request)
             return future.get()
@@ -68,9 +84,10 @@ class DubboClient(object) :
         index = random.randint(0, len(self.channels) - 1)
         return self.channels[index]
 
-    def __heartbeatCheck(self) :
+    @periodic_run(3)
+    def __heartbeatCheck(self):
         now = time.time()
-        for channel in self.channels :
+        for channel in self.channels:
             if now - channel.lastReadTime > self.heartbeat \
                     or now - channel.lastWriteTime > self.heartbeat :
                 request = protocol.DubboRequest()
@@ -124,7 +141,7 @@ class ServiceProxy(object) :
                 raise KeyError(errorStr)
         else :
             method = methods[0]
-        
+
         paramType = self.__getParamType(method)
 
         attachments = self.attachments.copy()
@@ -142,8 +159,7 @@ class ServiceProxy(object) :
             for i in range(len(paramTypes)) :
                 pType = type(args[i])
                 jType = paramTypes[i]
-                if \
-                    (pType == types.BooleanType and jType == 'bool') \
+                if (pType == types.BooleanType and jType == 'bool') \
                     or (pType == types.DictType and jType == 'dict') \
                     or (pType == types.FloatType and jType == 'float') \
                     or (pType == types.IntType and jType == 'int') \
@@ -184,7 +200,7 @@ def _getAndDelConfigParam(config, key, default = None) :
         return default
 
 class Dubbo(object):
-    def __init__(self, addrs, config = None):
+    def __init__(self, addrs, config = None, enable_heartbeat=False):
         if config :
             config = config.copy()
         else :
@@ -197,7 +213,7 @@ class Dubbo(object):
         owner = _getAndDelConfigParam(config, KEY_DUBBO_OWNER, DEFAULT_DUBBO_OWNER)
         customer = _getAndDelConfigParam(config, KEY_DUBBO_CUSTOMER, DEFAULT_DUBBO_CUSTOMER)
         self.attachments = {KEY_OWNER : owner, KEY_CUSTOMER : customer}
-        
+
         for key, value in self.config.items() :
             if key == KEY_REFERENCE :
                 continue
@@ -206,16 +222,20 @@ class Dubbo(object):
         if KEY_REFERENCE not in self.config :
             self.config[KEY_REFERENCE] = {}
 
-        scheduledExecutor.start()
+        #scheduledExecutor.start()
 
-        self.client = DubboClient(addrs, self.config)
-        scheduledExecutor.schedule(Future._checkTimeoutLoop, \
-                DEFAULT_FUTURE_CHECK_PERIOD, DEFAULT_FUTURE_CHECK_PERIOD)
+        self.client = DubboClient(addrs, self.config, enable_heartbeat)
+        #scheduledExecutor.schedule(Future._checkTimeoutLoop, \
+        #        DEFAULT_FUTURE_CHECK_PERIOD, DEFAULT_FUTURE_CHECK_PERIOD)
 
     def getObject(self, name):
+        if type(name) == bytes:
+            name = name.decode()
         return self.javaClassLoader.createObject(name)
 
     def getProxy(self, interface, **args) :
+        if type(interface) == str:
+            interface = interface.encode()
         classInfo = self.javaClassLoader.findClassInfo(interface)
         if classInfo == None :
             return None
@@ -244,5 +264,6 @@ class Dubbo(object):
             attachments[KEY_VERSION] = DEFAULT_SERVICE_VERSION
 
     def close(self) :
-        scheduledExecutor.stop()
+        #scheduledExecutor.stop()
+        print('Executors done!')
 
