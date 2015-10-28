@@ -741,7 +741,8 @@ class Hessian2Input(object) :
     def __decodeRef(self, code) :
         refId = self.__decodeInt(self.__readByte())
         if refId >= len(self.refs) :
-            raise ValueError('ref id %d is undefined' % (refId,))
+            return None
+            #raise ValueError('ref id %d is undefined' % (refId,))
 
         if __debug :
             print('read ref :', refId)
