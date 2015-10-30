@@ -85,12 +85,12 @@ class Hessian2Output(object) :
             ::= [xd0-xd7] b1 b0
             -262144 <= value <= 262143  value = ((code - 0xd4) << 16) + (b1 << 8) + b0
         '''
-        if -16 <= value <= 47 :
+        if -16 <= value <= 47:
             self.__writeByte(0x90 + value)
         elif -2048 <= value <= 2047 :
             self.__writeByte(0xc8 + (value >> 8))
             self.__writeByte(value & 0xff)
-        elif -262144 <= value <= 262143 :
+        elif -262144 <= value <= 262143:
             self.__writeByte(0xd4 + (value >> 16))
             self.__pack('>H', (value >> 8))
         else :
@@ -117,7 +117,10 @@ class Hessian2Output(object) :
             self.__writeByte(value & 0xff)
         elif -262144 <= value <= 262143 :
             self.__writeByte(0x3c + (value >> 16))
-            self.__pack('<H', (value >> 8))
+            # it should remain lowest 2 bytes, not highest, baka!
+            #self.__pack('>H', (value >> 8))
+            self.__pack('>H', value & 0xFFFF)
+
         elif -0x80000000 <= value <= 0x7fffffff:
             self.__write('\x59')
             self.__pack('>i', value)
