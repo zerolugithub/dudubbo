@@ -9,8 +9,8 @@ setup(
     version = __version__,
     description = 'python dubbo rpc framework client',
     keywords = 'dubbo hessian2 java',
-    url = 'https://github.com/zhouyougit/PyDubbo',
-    author = 'zhouyou',
-    author_email = 'zhouyoug@gmail.com',
+    url = 'https://github.com/dmall/dudubbo',
+    author = 'zhouyou, ly0',
+    author_email = 'zhouyoug@gmail.com, latyas@gmail.com',
     packages = find_packages(exclude = ['temp.*', '*.class', '*.jar'])
 )

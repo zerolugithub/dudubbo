@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 executors = ThreadPoolExecutor(max_workers=1000)
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 RpcContext = threading.local()
 
