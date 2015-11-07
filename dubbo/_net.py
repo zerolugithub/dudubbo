@@ -98,87 +98,81 @@ class Endpoint(object):
         self.loop = loop or asyncio.get_event_loop()
         self.addr = addr
         self.readHandler = readHandler
-
-        # block until connection created
-        # self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        host, port = addr
-        sock_coroutine = asyncio.open_connection(host, port)
-        self.reader, self.writer = self.loop.run_until_complete(sock_coroutine)
         self.cTime = None
+        self._lock = asyncio.Lock()
+        self._working = asyncio.Event()
+        self.working = False
+
+    async def init_connection(self):
+        host, port = self.addr
+        while True:
+            sock_coroutine = asyncio.open_connection(host, port)
+            try:
+                print('try to connect', self.addr)
+                self.reader, self.writer = await asyncio.wait_for(sock_coroutine, timeout=3)
+                print('Connected to %s:%s successfully' % self.addr)
+                self.working = True
+                with (await self._lock):
+                    self._working.set()
+                break
+            except asyncio.TimeoutError:
+                print('Tried to connect to %s:%s, timeout' % self.addr)
+                sock_coroutine.close()
+                continue
+            except OSError as e:
+                print('OSError', e)
+            except Exception as e:
+                print('Exception', e)
 
     def start(self):
         # new_loop = asyncio.SelectorEventLoop()
         # threading.Thread(target=self.__spawn_recv_worker, args=(new_loop,)).start()
         # future = asyncio.Future()
-        future = asyncio.ensure_future(self.__recvLoop())
-        # import heapq
-        # heapq.heappush(self.loop._scheduled, self.__recvLoop())
-        # .append()
+        # 开始接收循环, 考虑直接丢当前的IOLoop还是spawn一个新thread
+        future = asyncio.wait([self.init_connection(), self.__recvLoop()])
+        asyncio.ensure_future(future)
+        #asyncio.ensure_future(self.init_connection())
+        #asyncio.ensure_future(self.__recvLoop())
+        #asyncio.wait(self.init_connection(), 3)
+        #asyncio.ensure_future(self.__recvLoop())
 
     def __spawn_recv_worker(self, loop):
         loop.run_until_complete(self.__recvLoop())
 
     async def send(self, data):
+        #if self.working:
+        await self._working.wait()
         self.writer.write(data)
-        # self.queue.put(data)
-
-    # def __sendLoop(self) :
-    #     while True :
-    #         try :
-    #             data = self.queue.get()
-    #             self.writer(data)
-    #             #self.sock.sendall(data)
-    #         except Exception as e :
-    #             print('send error, need reconnection')
-    #             #self.__reconnection()
-
-    # def __reconnection(self) :
-    #     if not self.lock.acquire(False) :
-    #         self.lock.acquire()
-    #         self.lock.release()
-    #         return
-    #     try :
-    #         print('start reconnection')
-    #         while True :
-    #             try :
-    #                 print('start shutdown')
-    #                 try :
-    #                     self.sock.shutdown(socket.SHUT_RDWR)
-    #                 except :
-    #                     pass
-    #                 print('finish shutdown')
-    #                 del self.sock
-    #                 print('create new socket')
-    #                 self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #                 print('create new socket finish')
-    #                 self.cTime = time.time()
-    #                 print('start connect')
-    #                 self.sock.connect(self.addr)
-    #                 print('finish connect')
-    #                 break
-    #             except socket.error :
-    #                 if time.time() - self.cTime < 2:
-    #                     time.sleep(2)
-    #     finally :
-    #         self.lock.release()
-    #     print('end reconnection')
 
     async def __reconnection(self):
+        print('Lost remote connection %s:%s, try to reconnect' % self.addr)
         host, port = self.addr
         sock_coroutine = asyncio.open_connection(host, port)
         self.reader, self.writer = await sock_coroutine
+        print('Connected %s:%s' % self.addr)
+
 
     async def __recv(self, length):
         while True:
-            data = await self.reader.read(length)
+            try:
+                data = await self.reader.read(length)
+            except (TimeoutError, asyncio.TimeoutError):
+                print('Server %s:%s timeout, reconnect')
+                data = None
+
+
             if not data:
                 print('recv error')
-                await self.__reconnection()
+                self.working = False
+                #await self.__reconnection()
+                await self.init_connection()
                 continue
             return data
 
     async def __recvLoop(self):
+        # Wait for connection done.
+        await self._working.wait()
+        print('Connection established')
         while True:
             header = await self.__recv(protocol.HEADER_LENGTH)
             if header[:2] != protocol.MAGIC_NUMBER:

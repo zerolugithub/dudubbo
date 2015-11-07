@@ -135,7 +135,6 @@ def encodeRequest(request):
     header += flag.to_bytes(1, 'big')
     header += b'\x00'
     header += struct.pack('>q', request.rid)
-    print(request.rid)
 
     if request.isEvent:
         pass

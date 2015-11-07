@@ -31,21 +31,14 @@ def periodic_run(sec):
             async def wrapper(*args, **kwargs):
                 while True:
                     await func(*args, **kwargs)
-                    asyncio.sleep(sec)
-                    print('will run')
             return wrapper
 
         else:
             def wrapper(*args, **kwargs):
                 while True:
                     func(*args, **kwargs)
-                    time.sleep(sec)
-                    print('will run')
 
             return wrapper
-
-
-
     return runner
 
 
@@ -58,16 +51,17 @@ class DubboClient(object) :
     def __init__(self, addrs, config, enable_heartbeat=False) :
         self.channels = []
         self._enable_heartbeat = enable_heartbeat
-        for addr in addrs :
+        for addr in addrs:
             self.channels.append(DubboChannel(addr))
 
-        if config and KEY_HEARTBEAT in config :
+        if config and KEY_HEARTBEAT in config:
             self.heartbeat = config[KEY_HEARTBEAT]
         else :
             self.heartbeat = DEFAULT_HEARTBEAT
 
         if enable_heartbeat:
-            executors.submit(self.__heartbeatCheck)
+            #executors.submit(self.__heartbeatCheck)
+            asyncio.ensure_future(self.__heartbeatCheck())
         #scheduledExecutor.schedule(self.__heartbeatCheck, self.heartbeat, self.heartbeat)
 
     async def invoke(self, rpcInvocation) :
@@ -80,7 +74,7 @@ class DubboClient(object) :
         withReturn = _getRequestParam(request, KEY_WITH_RETURN, True)
         is_async = _getRequestParam(request, KEY_ASYNC, False)
 
-        if not withReturn :
+        if not withReturn:
             channel.send(request)
             return
 
@@ -99,16 +93,18 @@ class DubboClient(object) :
         index = random.randint(0, len(self.channels) - 1)
         return self.channels[index]
 
-    @periodic_run(3)
-    def __heartbeatCheck(self):
-        now = time.time()
-        for channel in self.channels:
-            if now - channel.lastReadTime > self.heartbeat \
-                    or now - channel.lastWriteTime > self.heartbeat :
-                request = protocol.DubboRequest()
-                request.isEvent = True
-                request.isHeartbeat = True
-                channel.send(request)
+    #@periodic_run(3)
+    async def __heartbeatCheck(self):
+        while True:
+            now = time.time()
+            for channel in self.channels:
+                if now - channel.lastReadTime > self.heartbeat \
+                        or now - channel.lastWriteTime > self.heartbeat :
+                    request = protocol.DubboRequest()
+                    request.isEvent = True
+                    request.isHeartbeat = True
+                    await channel.send(request)
+            await asyncio.sleep(3)
 
 class ServiceProxy(object) :
     def __init__(self, client, classInfo, attachments) :
@@ -163,9 +159,7 @@ class ServiceProxy(object) :
         if name in self.methodConfig :
             attachments.update(self.methodConfig[name])
         invocation = protocol.RpcInvocation(name, paramType, args, attachments)
-        ret = await self.client.invoke(invocation)
-        return ret
-        #return (await self.client.invoke(invocation))
+        return (await self.client.invoke(invocation))
 
     def __guessMethod(self, methods, args) :
         for method in methods :
