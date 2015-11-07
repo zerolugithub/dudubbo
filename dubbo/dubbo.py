@@ -1,4 +1,5 @@
 #coding=utf-8
+import inspect
 import json
 from . import protocol
 from . import hessian2
@@ -26,12 +27,25 @@ RpcContext = threading.local()
 
 def periodic_run(sec):
     def runner(func):
-        def wrapper(*args, **kwargs):
-            while True:
-                func(*args, **kwargs)
-                time.sleep(sec)
-                print('will run')
-        return wrapper
+        if inspect.iscoroutinefunction(func):
+            async def wrapper(*args, **kwargs):
+                while True:
+                    await func(*args, **kwargs)
+                    asyncio.sleep(sec)
+                    print('will run')
+            return wrapper
+
+        else:
+            def wrapper(*args, **kwargs):
+                while True:
+                    func(*args, **kwargs)
+                    time.sleep(sec)
+                    print('will run')
+
+            return wrapper
+
+
+
     return runner
 
 
@@ -56,7 +70,7 @@ class DubboClient(object) :
             executors.submit(self.__heartbeatCheck)
         #scheduledExecutor.schedule(self.__heartbeatCheck, self.heartbeat, self.heartbeat)
 
-    def invoke(self, rpcInvocation) :
+    async def invoke(self, rpcInvocation) :
         request = protocol.DubboRequest()
         request.data = rpcInvocation
 
@@ -64,21 +78,22 @@ class DubboClient(object) :
 
         timeout = _getRequestParam(request, KEY_TIMEOUT)
         withReturn = _getRequestParam(request, KEY_WITH_RETURN, True)
-        async = _getRequestParam(request, KEY_ASYNC, False)
+        is_async = _getRequestParam(request, KEY_ASYNC, False)
 
         if not withReturn :
             channel.send(request)
             return
 
-        if async:
+        if is_async:
             future = Future(request, timeout, channel)
             RpcContext.future = future
-            channel.send(request)
+            await channel.send(request)
             return
         else:
             future = Future(request, timeout, channel)
-            channel.send(request)
-            return future.get()
+            await channel.send(request)
+            ret = await future.get()
+            return ret
 
     def __selectChannel(self, request) :
         index = random.randint(0, len(self.channels) - 1)
@@ -121,7 +136,7 @@ class ServiceProxy(object) :
                 else :
                     self.methodConfig[methodName].update(methodConfig)
 
-    def invoke(self, name, args) :
+    async def invoke(self, name, args) :
         if type(name) == str:
             name = name.encode('utf-8')
         if not name in self.classInfo.methodMap :
@@ -148,7 +163,9 @@ class ServiceProxy(object) :
         if name in self.methodConfig :
             attachments.update(self.methodConfig[name])
         invocation = protocol.RpcInvocation(name, paramType, args, attachments)
-        return self.client.invoke(invocation)
+        ret = await self.client.invoke(invocation)
+        return ret
+        #return (await self.client.invoke(invocation))
 
     def __guessMethod(self, methods, args) :
         for method in methods :

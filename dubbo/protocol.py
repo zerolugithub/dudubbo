@@ -87,6 +87,8 @@ class DubboException(Exception):
         self.data = data
 
     def __str__(self):
+        for i in self.data.stackTrace:
+            print(''.join([(str(x[0]) + ':' + str(x[1]) + '\n') for x in i.__dict__.items() if not x[0].startswith('_')]))
         return 'DubboException :' + str(self.data)
 
 
@@ -133,6 +135,7 @@ def encodeRequest(request):
     header += flag.to_bytes(1, 'big')
     header += b'\x00'
     header += struct.pack('>q', request.rid)
+    print(request.rid)
 
     if request.isEvent:
         pass
