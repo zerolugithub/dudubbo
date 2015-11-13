@@ -1,120 +1,19 @@
 import asyncio
 from . import protocol
-import threading
-import time
-from ._utils import *
-
-
-class Future(object):
-    FUTURES = {}
-    FUTURES_LOCK = threading.Lock()
-
-    def __init__(self, request, timeout, channel):
-        self.id = request.rid
-        self.timeout = timeout
-        self.lock = asyncio.Lock()
-        self.cond = asyncio.Condition(self.lock)
-        self.reqeust = request
-        self.response = None
-        self.channel = channel
-        self.timestamp = time.time()
-        Future.FUTURES_LOCK.acquire()
-        try:
-            Future.FUTURES[self.id] = self
-        finally:
-            Future.FUTURES_LOCK.release()
-
-    async def get(self):
-        ret = await self.getWithTimeout(self.timeout)
-        return ret
-
-    async def getWithTimeout(self, timeout):
-        if self.isDone():
-            return self.__doReturn()
-        with (await self.lock):
-            if not self.isDone():
-                # Coroutine wait on condition
-                await self.cond.wait()
-                if not self.isDone():
-                    raise protocol.DubboTimeoutException('waiting response timeout. elapsed :' + str(self.timeout))
-
-        # 拿到了对应 request id 的返回值, 调用返回handler
-        return self.__doReturn()
-
-    def setCallback(self, callback):
-        pass
-
-    def isDone(self):
-        return self.response != None
-
-    @classmethod
-    async def received(cls, response):
-        if response.rid in cls.FUTURES:
-            Future.FUTURES_LOCK.acquire()
-            try:
-                if response.rid in cls.FUTURES:
-                    future = Future.FUTURES[response.rid]
-                    del Future.FUTURES[response.rid]
-                else:
-                    return
-            finally:
-                Future.FUTURES_LOCK.release()
-            await future.doReceived(response)
-
-    async def doReceived(self, response):
-        with (await self.lock):
-            self.response = response
-            self.cond.notify_all()
-
-    def __doReturn(self):
-        if self.response.status != protocol.DubboResponse.OK:
-            print(self.response)
-            raise protocol.DubboException('DubboException : status = ' + \
-                                          str(self.response.status) + ' errorMsg = ' + \
-                                          str(self.response.errorMsg))
-        elif self.response.exception != None:
-            raise protocol.DubboException(self.response.exception)
-        else:
-            return self.response.result
-
-    @classmethod
-    def _checkTimeoutLoop(cls):
-        try:
-            for future in Future.FUTURES.values():
-                if future.isDone():
-                    continue
-                if (time.time() - future.timestamp) > future.timeout:
-                    print('find timeout future')
-                    response = protocol.DubboResponse(future.id)
-                    response.status = protocol.DubboResponse.SERVER_TIMEOUT
-                    response.seterrorMsg = 'waiting response timeout. elapsed :' + str(future.timeout)
-                    Future.received(response)
-        except Exception as e:
-            print('check timeout loop' + str(e))
 
 
 class Endpoint(object):
-    def __init__(self, addr, readHandler, loop=None):
-        self.loop = loop or asyncio.get_event_loop()
+    def __init__(self, addr):
         self.addr = addr
-        self.readHandler = readHandler
-        self.cTime = None
-        self._lock = asyncio.Lock()
-        self._working = asyncio.Event()
-        self.working = False
 
     async def init_connection(self):
         host, port = self.addr
         while True:
             sock_coroutine = asyncio.open_connection(host, port)
             try:
-                print('try to connect', self.addr)
                 self.reader, self.writer = await asyncio.wait_for(sock_coroutine, timeout=3)
-                print('Connected to %s:%s successfully' % self.addr)
-                self.working = True
-                with (await self._lock):
-                    self._working.set()
-                break
+                #print('Connected to %s:%s successfully' % self.addr)
+                return
             except asyncio.TimeoutError:
                 print('Tried to connect to %s:%s, timeout' % self.addr)
                 sock_coroutine.close()
@@ -124,55 +23,41 @@ class Endpoint(object):
             except Exception as e:
                 print('Exception', e)
 
-    def start(self):
-        # new_loop = asyncio.SelectorEventLoop()
-        # threading.Thread(target=self.__spawn_recv_worker, args=(new_loop,)).start()
-        # future = asyncio.Future()
-        # 开始接收循环, 考虑直接丢当前的IOLoop还是spawn一个新thread
-        future = asyncio.wait([self.init_connection(), self.__recvLoop()])
-        asyncio.ensure_future(future)
-        #asyncio.ensure_future(self.init_connection())
-        #asyncio.ensure_future(self.__recvLoop())
-        #asyncio.wait(self.init_connection(), 3)
-        #asyncio.ensure_future(self.__recvLoop())
-
-    def __spawn_recv_worker(self, loop):
-        loop.run_until_complete(self.__recvLoop())
+    def close_connection(self):
+        try:
+            self.writer.close()
+            return True
+        except:
+            return False
 
     async def send(self, data):
-        #if self.working:
-        await self._working.wait()
         self.writer.write(data)
-
-    async def __reconnection(self):
-        print('Lost remote connection %s:%s, try to reconnect' % self.addr)
-        host, port = self.addr
-        sock_coroutine = asyncio.open_connection(host, port)
-        self.reader, self.writer = await sock_coroutine
-        print('Connected %s:%s' % self.addr)
-
 
     async def __recv(self, length):
         while True:
             try:
                 data = await self.reader.read(length)
             except (TimeoutError, asyncio.TimeoutError):
-                print('Server %s:%s timeout, reconnect')
+                print('Server %s:%s timeout, reconnect' % self.addr)
                 data = None
 
-
             if not data:
-                print('recv error')
+                print('no data')
                 self.working = False
-                #await self.__reconnection()
                 await self.init_connection()
                 continue
             return data
 
-    async def __recvLoop(self):
+    def response_handler(self, header, data):
+        obj = protocol.decode(header, data)
+
+        if obj.isHeartbeat:
+            return
+        return obj
+
+    async def receive(self):
         # Wait for connection done.
-        await self._working.wait()
-        print('Connection established')
+        # await self._working.wait()
         while True:
             header = await self.__recv(protocol.HEADER_LENGTH)
             if header[:2] != protocol.MAGIC_NUMBER:
@@ -186,41 +71,32 @@ class Endpoint(object):
                 temp = await self.__recv(dataLength - len(data))
                 data += temp
 
-            await self.readHandler(header, data)
+            return self.response_handler(header, data)
 
 
 class DubboChannel(object):
     def __init__(self, addr):
         self.addr = addr
-        self.endpoint = Endpoint(addr, self.__recvResponse)
-        self.endpoint.start()
-        self.lastReadTime = time.time()
-        self.lastWriteTime = time.time()
+        self.sockets = {}
 
-    async def send(self, message):
-        if isinstance(message, protocol.DubboRequest):
-            data = protocol.encodeRequest(message)
+    async def send_request(self, message, request_id=None, new_conn=True):
+        # connected to server
+        if request_id and new_conn:
+            # get socket from records
+            endpoint = Endpoint(self.addr)
+            self.sockets[request_id] = endpoint
+            await endpoint.init_connection()
         else:
-            data = protocol.encodeResponse(message)
+            endpoint = self.sockets[request_id]
 
-        self.lastWriteTime = time.time()
-        await self.endpoint.send(data)
+        data = protocol.encodeRequest(message)
 
-    async def __recvResponse(self, header, data):
-        self.lastReadTime = time.time()
-        obj = protocol.decode(header, data)
+        # send request
+        await endpoint.send(data)
 
-        if isinstance(obj, protocol.DubboRequest):
-            request = obj
-            if request.isHeartbeat:
-                response = protocol.DubboResponse(request.rid)
-                response.isEvent = True
-                response.isHeartbeat = True
-                await self.send(response)
-            else:
-                raise Exception('unimplement recv data request')
-        else:
-            response = obj
-            if response.isHeartbeat:
-                return
-            await Future.received(response)
+        # receive response
+        response = await endpoint.receive()
+        return response.result
+
+    def close(self, request_id):
+        self.sockets[request_id].close_connection()
