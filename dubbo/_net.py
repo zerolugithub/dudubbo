@@ -1,4 +1,6 @@
 import asyncio
+
+from dubbo.log import logger
 from . import protocol
 import threading
 import time
@@ -68,11 +70,12 @@ class Future(object):
 
     def __doReturn(self):
         if self.response.status != protocol.DubboResponse.OK:
-            print(self.response)
+            logger.error('DubboException:', str(self.response.status), self.response.errorMsg)
             raise protocol.DubboException('DubboException : status = ' + \
                                           str(self.response.status) + ' errorMsg = ' + \
                                           str(self.response.errorMsg))
         elif self.response.exception != None:
+            logger.error('DubboException: ' + self.response.exception)
             raise protocol.DubboException(self.response.exception)
         else:
             return self.response.result
@@ -90,6 +93,7 @@ class Future(object):
                     response.seterrorMsg = 'waiting response timeout. elapsed :' + str(future.timeout)
                     Future.received(response)
         except Exception as e:
+            logger.error('Future check timeout loop' + str(e))
             print('check timeout loop' + str(e))
 
 
@@ -108,21 +112,24 @@ class Endpoint(object):
         while True:
             sock_coroutine = asyncio.open_connection(host, port)
             try:
-                print('try to connect', self.addr)
                 self.reader, self.writer = await asyncio.wait_for(sock_coroutine, timeout=3)
-                print('Connected to %s:%s successfully' % self.addr)
+                logger.info('Connected to %s:%s successfully' % self.addr)
+                #print('Connected to %s:%s successfully' % self.addr)
                 self.working = True
                 with (await self._lock):
                     self._working.set()
                 break
             except asyncio.TimeoutError:
-                print('Tried to connect to %s:%s, timeout' % self.addr)
+                logger.error('Tried to connect to %s:%s, timeout' % self.addr)
+                #print('Tried to connect to %s:%s, timeout' % self.addr)
                 sock_coroutine.close()
                 continue
             except OSError as e:
-                print('OSError', e)
+                logger.error('OSError: %s(%s:%s)' % (str(e),) + self.addr)
+                #print('OSError', e)
             except Exception as e:
-                print('Exception', e)
+                logger.error('Exception: %s(%s:%s)' % (str(e),) + self.addr)
+                #print('Exception', e)
 
     def start(self):
         # new_loop = asyncio.SelectorEventLoop()
@@ -157,12 +164,13 @@ class Endpoint(object):
             try:
                 data = await self.reader.read(length)
             except (TimeoutError, asyncio.TimeoutError):
-                print('Server %s:%s timeout, reconnect')
+                logger.error('Connection to %s:%s, timeout' % self.addr)
+                #print('Server %s:%s timeout, reconnect')
                 data = None
 
 
             if not data:
-                print('recv error')
+                logger.error('Recv empty (%s:%s)' % self.addr)
                 self.working = False
                 #await self.__reconnection()
                 await self.init_connection()
@@ -172,7 +180,7 @@ class Endpoint(object):
     async def __recvLoop(self):
         # Wait for connection done.
         await self._working.wait()
-        print('Connection established')
+        logger.info('Connection established: %s:%s' % self.addr)
         while True:
             header = await self.__recv(protocol.HEADER_LENGTH)
             if header[:2] != protocol.MAGIC_NUMBER:
