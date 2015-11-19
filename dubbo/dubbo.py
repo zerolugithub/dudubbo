@@ -210,7 +210,7 @@ def _getAndDelConfigParam(config, key, default=None):
 
 
 class Dubbo(object):
-    def __init__(self, addrs, config=None):
+    def __init__(self, addrs, config=None, enable_heartbeat=False):
         if config:
             config = config.copy()
         else:
