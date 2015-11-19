@@ -81,13 +81,18 @@ class DubboChannel(object):
 
     async def send_request(self, message, request_id=None, new_conn=True):
         # connected to server
-        if request_id and new_conn:
-            # get socket from records
-            endpoint = Endpoint(self.addr)
-            self.sockets[request_id] = endpoint
-            await endpoint.init_connection()
+        if request_id:
+            if new_conn:
+                # get socket from records
+                endpoint = Endpoint(self.addr)
+                self.sockets[request_id] = endpoint
+                await endpoint.init_connection()
+            else:
+                endpoint = self.sockets[request_id]
         else:
-            endpoint = self.sockets[request_id]
+            # plastic use
+            endpoint = Endpoint(self.addr)
+            await endpoint.init_connection()
 
         data = protocol.encodeRequest(message)
 
