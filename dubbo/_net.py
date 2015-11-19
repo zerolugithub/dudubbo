@@ -101,6 +101,13 @@ class DubboChannel(object):
 
         # receive response
         response = await endpoint.receive()
+
+        # close socket
+        if request_id:
+            if not new_conn:
+                endpoint.close_connection()
+        else:
+            endpoint.close_connection()
         return response.result
 
     def close(self, request_id):
