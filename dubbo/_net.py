@@ -1,4 +1,5 @@
 import asyncio
+import socket
 from . import protocol
 
 
@@ -9,7 +10,7 @@ class Endpoint(object):
     async def init_connection(self):
         host, port = self.addr
         while True:
-            sock_coroutine = asyncio.open_connection(host, port)
+            sock_coroutine = asyncio.open_connection(host, port, flags=socket.TCP_NODELAY)
             try:
                 self.reader, self.writer = await asyncio.wait_for(sock_coroutine, timeout=3)
                 #print('Connected to %s:%s successfully' % self.addr)
