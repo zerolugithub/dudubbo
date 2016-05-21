@@ -7,45 +7,44 @@ class Endpoint(object):
     def __init__(self, addr):
         self.addr = addr
 
-    async def init_connection(self):
+    def init_connection(self):
         host, port = self.addr
         while True:
-            sock_coroutine = asyncio.open_connection(host, port, flags=socket.TCP_NODELAY)
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.sock.settimeout(1)
+
             try:
-                self.reader, self.writer = await asyncio.wait_for(sock_coroutine, timeout=3)
-                #print('Connected to %s:%s successfully' % self.addr)
+                self.sock.connect((host, port))
+                #self.reader, self.writer = asyncio.wait_for(sock_coroutine, timeout=1)
+                print('Connected to %s:%s successfully' % self.addr)
                 return
-            except asyncio.TimeoutError:
-                print('Tried to connect to %s:%s, timeout' % self.addr)
-                sock_coroutine.close()
-                continue
-            except OSError as e:
-                print('OSError', e)
             except Exception as e:
-                print('Exception', e)
+                print('Tried to connect to %s:%s, error' % self.addr)
+                raise e
 
     def close_connection(self):
         try:
-            self.writer.close()
+            self.sock.close()
             return True
         except:
             return False
 
-    async def send(self, data):
-        self.writer.write(data)
+    def send(self, data):
+        self.sock.send(data)
 
-    async def __recv(self, length):
+    def __recv(self, length):
         while True:
             try:
-                data = await self.reader.read(length)
-            except (TimeoutError, asyncio.TimeoutError):
+                data = self.sock.recv(length)
+            except (TimeoutError):
                 print('Server %s:%s timeout, reconnect' % self.addr)
                 data = None
 
             if not data:
                 print('no data')
                 self.working = False
-                await self.init_connection()
+                self.init_connection()
                 continue
             return data
 
@@ -56,20 +55,20 @@ class Endpoint(object):
             return
         return obj
 
-    async def receive(self):
+    def receive(self):
         # Wait for connection done.
-        # await self._working.wait()
+        # self._working.wait()
         while True:
-            header = await self.__recv(protocol.HEADER_LENGTH)
+            header = self.__recv(protocol.HEADER_LENGTH)
             if header[:2] != protocol.MAGIC_NUMBER:
                 continue
             while len(header) < protocol.HEADER_LENGTH:
-                temp = await self.__recv(protocol.HEADER_LENGTH - len(header))
+                temp = self.__recv(protocol.HEADER_LENGTH - len(header))
                 header += temp
             dataLength = protocol.getDataLength(header)
             data = b''
             while len(data) < dataLength:
-                temp = await self.__recv(dataLength - len(data))
+                temp = self.__recv(dataLength - len(data))
                 data += temp
 
             return self.response_handler(header, data)
@@ -80,28 +79,28 @@ class DubboChannel(object):
         self.addr = addr
         self.sockets = {}
 
-    async def send_request(self, message, request_id=None, new_conn=True):
+    def send_request(self, message, request_id=None, new_conn=True):
         # connected to server
         if request_id:
             if new_conn:
                 # get socket from records
                 endpoint = Endpoint(self.addr)
                 self.sockets[request_id] = endpoint
-                await endpoint.init_connection()
+                endpoint.init_connection()
             else:
                 endpoint = self.sockets[request_id]
         else:
             # plastic use
             endpoint = Endpoint(self.addr)
-            await endpoint.init_connection()
+            endpoint.init_connection()
 
         data = protocol.encodeRequest(message)
 
         # send request
-        await endpoint.send(data)
+        endpoint.send(data)
 
         # receive response
-        response = await endpoint.receive()
+        response = endpoint.receive()
 
         # close socket
         if request_id:

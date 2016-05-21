@@ -46,7 +46,7 @@ class DubboClient(object):
         channel = self.long_conn_records[request_id]
         channel.close(request_id)
 
-    async def invoke(self, rpcInvocation, request_id=None):
+    def invoke(self, rpcInvocation, request_id=None):
         request = protocol.DubboRequest()
         request.data = rpcInvocation
 
@@ -60,25 +60,21 @@ class DubboClient(object):
 
         timeout = _getRequestParam(request, KEY_TIMEOUT)
         withReturn = _getRequestParam(request, KEY_WITH_RETURN, True)
-        is_async = _getRequestParam(request, KEY_ASYNC, False)
+        is_= _getRequestParam(request, KEY_ASYNC, False)
 
         if not withReturn:
             channel.send(request)
-            return
-
-        if is_async:
-            await channel.send(request)
             return
         else:
             if request_id:
                 # For long connection
                 if request_id in channel.sockets:
-                    ret = await channel.send_request(request, request_id=request_id, new_conn=False)
+                    ret = channel.send_request(request, request_id=request_id, new_conn=False)
                 else:
-                    ret = await channel.send_request(request, request_id=request_id)
+                    ret = channel.send_request(request, request_id=request_id)
             else:
                 # For short connection
-                ret = await channel.send_request(request)
+                ret = channel.send_request(request)
             return ret
 
     def __selectChannel(self, request):
@@ -125,7 +121,7 @@ class ServiceProxy(object):
                 else:
                     self.methodConfig[methodName].update(methodConfig)
 
-    async def invoke(self, name, args):
+    def invoke(self, name, args):
         if type(name) == str:
             name = name.encode('utf-8')
         if not name in self.classInfo.methodMap:
@@ -153,9 +149,9 @@ class ServiceProxy(object):
             attachments.update(self.methodConfig[name])
         invocation = protocol.RpcInvocation(name, paramType, args, attachments)
         if not self.request_id in self.client.long_conn_records:
-            return (await self.client.invoke(invocation))
+            return (self.client.invoke(invocation))
         else:
-            return (await self.client.invoke(invocation, request_id=self.request_id))
+            return (self.client.invoke(invocation, request_id=self.request_id))
 
     def __guessMethod(self, methods, args):
         for method in methods:
